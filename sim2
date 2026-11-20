@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="et">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Neon E-Bike AI — Stars & Procedural Map</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: #090c14; font-family: system-ui, -apple-system, sans-serif; color: white; }
+
+    #hud {
+      position: absolute; top: 20px; left: 20px; z-index: 10;
+      background: rgba(10, 14, 24, 0.82); padding: 14px 18px; border-radius: 12px;
+      border: 1px solid rgba(255, 45, 135, 0.35); backdrop-filter: blur(6px);
+      min-width: 220px;
+    }
+    #stars { font-size: 22px; letter-spacing: 3px; color: #ffd000; margin-bottom: 6px; text-shadow: 0 0 10px rgba(255, 208, 0, 0.5); }
+    .stat { font-size: 16px; margin: 4px 0; font-weight: 600; }
+    .val { color: #00f5d4; font-family: monospace; font-size: 18px; }
+
+    #ai-trainer {
+      position: absolute; bottom: 20px; left: 20px; z-index: 10;
+      background: rgba(10, 14, 24, 0.88); padding: 14px; border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16); width: 285px;
+    }
+    #ai-trainer h3 { margin: 0 0 8px 0; font-size: 13px; color: #ff2d87; text-transform: uppercase; letter-spacing: 0.6px; }
+    .train-btn {
+      display: flex; justify-content: space-between; align-items: center;
+      width: 100%; padding: 8px 11px; margin-bottom: 5px;
+      background: #182032; color: white; border: 1px solid #2d3a54;
+      border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500;
+    }
+    .train-btn.recording { background: #ff2d87; border-color: #ff85b8; }
+    .badge { background: #090c14; padding: 2px 7px; border-radius: 9px; font-size: 11px; color: #00f5d4; }
+    .reset-btn {
+      width: 100%; padding: 7px; margin-top: 4px; background: transparent;
+      color: #9aa7bf; border: 1px solid #2d3a54; border-radius: 6px; cursor: pointer; font-size: 12px;
+    }
+
+    #cam-container {
+      position: absolute; bottom: 20px; right: 20px; z-index: 10;
+      width: 230px; height: 172px; border-radius: 12px; overflow: hidden;
+      border: 2px solid #00f5d4; background: #000; transform: scaleX(-1);
+    }
+    video, canvas#output_canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
+
+    #start-screen {
+      position: absolute; inset: 0; z-index: 20;
+      background: radial-gradient(circle at top, #1b1438 0%, #07090f 75%);
+      display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px;
+    }
+    #start-btn {
+      padding: 15px 34px; font-size: 19px; background: linear-gradient(90deg, #ff2d87, #ff8c00);
+      color: #fff; border: none; border-radius: 10px; font-weight: bold; cursor: pointer; margin-top: 18px;
+    }
+  </style>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+  <div id="start-screen">
+    <h1 style="margin: 0; font-size: 32px;">NEON E-BIKE SIMULATOR</h1>
+    <p style="max-width: 460px; line-height: 1.5; color: #c7d0e0;">
+      Ise loov linnakaart, tärnide tase (★) ja kaameraga treenitav AI. NB: brauseris on tegu stiliseeritud neoon-3D graafikaga, mitte päris GTA 6 mootoriga.
+    </p>
+    <button id="start-btn" onclick="startSim()">Käivita Kaamera ja Mäng</button>
+  </div>
+
+  <div id="hud">
+    <div id="stars">☆☆☆☆☆</div>
+    <div class="stat">Kiirus: <span id="speed-val" class="val">0</span> km/h</div>
+    <div class="stat">AI olek: <span id="ai-state" class="val">Ootan...</span></div>
+    <div id="status" style="font-size: 12px; color: #9aa7bf; margin-top: 6px;">Treeni AI-d või alusta sõitu</div>
+  </div>
+
+  <div id="ai-trainer">
+    <h3>🧠 AI Treening (hoia all)</h3>
+    <button class="train-btn" onmousedown="startRec('idle')" onmouseup="stopRec()" ontouchstart="startRec('idle')" ontouchend="stopRec()">
+      <span>1. Otse (gaas maas)</span> <span class="badge" id="cnt-idle">0</span>
+    </button>
+    <button class="train-btn" onmousedown="startRec('gas')" onmouseup="stopRec()" ontouchstart="startRec('gas')" ontouchend="stopRec()">
+      <span>2. Otse + GAAS</span> <span class="badge" id="cnt-gas">0</span>
+    </button>
+    <button class="train-btn" onmousedown="startRec('left')" onmouseup="stopRec()" ontouchstart="startRec('left')" ontouchend="stopRec()">
+      <span>3. Keera VASAKULE</span> <span class="badge" id="cnt-left">0</span>
+    </button>
+    <button class="train-btn" onmousedown="startRec('right')" onmouseup="stopRec()" ontouchstart="startRec('right')" ontouchend="stopRec()">
+      <span>4. Keera PAREMALE</span> <span class="badge" id="cnt-right">0</span>
+    </button>
+    <button class="reset-btn" onclick="resetAI()">Kustuta treeningandmed</button>
+  </div>
+
+  <div id="cam-container">
+    <video id="input_video" playsinline></video>
+    <canvas id="output_canvas"></canvas>
+  </div>
+
+  <script>
+    // --- AI TREENING (KNN + localStorage) ---
+    let trainingData = JSON.parse(localStorage.getItem('ebike_neon_ai')) || [];
+    let recordingLabel = null;
+    let currentFeatures = null;
+
+    function updateBadges() {
+      const counts = { idle: 0, gas: 0, left: 0, right: 0 };
+      trainingData.forEach(d => { if (counts[d.label] !== undefined) counts[d.label]++; });
+      document.getElementById('cnt-idle').innerText = counts.idle;
+      document.getElementById('cnt-gas').innerText = counts.gas;
+      document.getElementById('cnt-left').innerText = counts.left;
+      document.getElementById('cnt-right').innerText = counts.right;
+    }
+    updateBadges();
+
+    function startRec(label) {
+      recordingLabel = label;
+      if (event && event.currentTarget) event.currentTarget.classList.add('recording');
+    }
+    function stopRec() {
+      recordingLabel = null;
+      document.querySelectorAll('.train-btn').forEach(b => b.classList.remove('recording'));
+      localStorage.setItem('ebike_neon_ai', JSON.stringify(trainingData));
+    }
+    function resetAI() {
+      trainingData = [];
+      localStorage.removeItem('ebike_neon_ai');
+      updateBadges();
+    }
+
+    function extractFeatures(multiHandLandmarks) {
+      if (!multiHandLandmarks || multiHandLandmarks.length === 0) return null;
+      const hands = [...multiHandLandmarks].sort((a, b) => a[0].x - b[0].x);
+      const features = [];
+      const pts = [0, 4, 8, 12, 20];
+      for (let h = 0; h < 2; h++) {
+        if (hands[h]) {
+          pts.forEach(idx => features.push(hands[h][idx].x, hands[h][idx].y));
+        } else {
+          features.push(0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        }
+      }
+      return features;
+    }
+
+    function predictPose(features) {
+      if (!features || trainingData.length === 0) return null;
+      const scored = trainingData.map(item => {
+        let sum = 0;
+        for (let i = 0; i < features.length; i++) {
+          const diff = features[i] - item.features[i];
+          sum += diff * diff;
+        }
+        return { label: item.label, dist: Math.sqrt(sum) };
+      }).sort((a, b) => a.dist - b.dist);
+
+      const votes = {};
+      scored.slice(0, 3).forEach(v => votes[v.label] = (votes[v.label] || 0) + 1);
+      return Object.keys(votes).reduce((a, b) => votes[a] > votes[b] ? a : b);
+    }
+
+    // --- MÄNGU OLEK & TÄHTEDE SÜSTEEM ---
+    let speed = 0, targetThrottle = 0, targetSteer = 0, currentSteer = 0;
+    let bikeX = 0, bikeZ = 0, bikeHeading = 0;
+    let wantedScore = 0; // 0 kuni 500 -> 0 kuni 5 tärni
+
+    function updateStarsHUD() {
+      const stars = Math.min(5, Math.floor(wantedScore / 100));
+      document.getElementById('stars').innerText = '★'.repeat(stars) + '☆'.repeat(5 - stars);
+    }
+
+    // --- THREE.JS MAAILM & ISE LOOV KAART ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0b0f1d);
+    scene.fog = new THREE.FogExp2(0x0b0f1d, 0.012);
+
+    const camera = new THREE.PerspectiveCamera(72, window.innerWidth / window.innerHeight, 0.1, 220);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0x5b6b99, 1.1));
+    const dirLight = new THREE.DirectionalLight(0xff88cc, 0.9);
+    dirLight.position.set(20, 40, 15);
+    scene.add(dirLight);
+
+    // Suur maapind, mis liigub kaasa
+    const ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(800, 800),
+      new THREE.MeshStandardMaterial({ color: 0x101626, roughness: 0.85 })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    scene.add(ground);
+
+    // Lenks
+    const handlebarGroup = new THREE.Group();
+    const bar = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.03, 0.03, 0.82, 12),
+      new THREE.MeshStandardMaterial({ color: 0x00f5d4, emissive: 0x003b33 })
+    );
+    bar.rotation.z = Math.PI / 2;
+    handlebarGroup.add(bar);
+    scene.add(handlebarGroup);
+
+    // Protseduuriline kaart (ruudustikuplokid ratta ümber)
+    const CHUNK_SIZE = 28;
+    const chunks = new Map();
+    const roadMat = new THREE.MeshStandardMaterial({ color: 0x1d2438, roughness: 0.7 });
+    const lineMat = new THREE.MeshBasicMaterial({ color: 0xff2d87 });
+    const buildingMats = [
+      new THREE.MeshStandardMaterial({ color: 0x182238, emissive: 0x091124 }),
+      new THREE.MeshStandardMaterial({ color: 0x221b38, emissive: 0x120924 }),
+      new THREE.MeshStandardMaterial({ color: 0x162b33, emissive: 0x07181f })
+    ];
+    const obstacleMat = new THREE.MeshStandardMaterial({ color: 0xffaa00, emissive: 0x442200 });
+
+    function hash2D(gx, gz) {
+      const n = Math.sin(gx * 127.1 + gz * 311.7) * 43758.5453123;
+      return n - Math.floor(n);
+    }
+
+    function createChunk(gx, gz) {
+      const group = new THREE.Group();
+      const wx = gx * CHUNK_SIZE;
+      const wz = gz * CHUNK_SIZE;
+      group.position.set(wx, 0, wz);
+
+      // Tee ristmik/lõik
+      const road = new THREE.Mesh(new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE), roadMat);
+      road.rotation.x = -Math.PI / 2;
+      road.position.y = 0.02;
+      group.add(road);
+
+      // Neoon-keskjoon
+      const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.25, CHUNK_SIZE * 0.6), lineMat);
+      stripe.rotation.x = -Math.PI / 2;
+      stripe.position.y = 0.03;
+      group.add(stripe);
+
+      const r1 = hash2D(gx, gz);
+      const r2 = hash2D(gx + 19, gz - 37);
+
+      // Hooned tee ääres (väldime täiesti keset (0,0))
+      if (!(gx === 0 && gz === 0)) {
+        if (r1 > 0.32) {
+          const h = 6 + r2 * 24;
+          const b = new THREE.Mesh(new THREE.BoxGeometry(7, h, 7), buildingMats[Math.floor(r1 * buildingMats.length)]);
+          b.position.set((r1 > 0.66 ? 1 : -1) * 9.5, h / 2, (r2 - 0.5) * 10);
+          group.add(b);
+        }
+        // Liiklus-/ohupostid, mis tõstavad tärne
+        if (r2 > 0.55) {
+          const obs = new THREE.Mesh(new THREE.BoxGeometry(1.1, 1.3, 1.1), obstacleMat);
+          obs.position.set((r1 - 0.5) * 8, 0.65, (r2 - 0.5) * 8);
+          obs.userData.isObstacle = true;
+          group.add(obs);
+        }
+      }
+
+      scene.add(group);
+      return group;
+    }
+
+    function updateProceduralMap() {
+      const cgx = Math.round(bikeX / CHUNK_SIZE);
+      const cgz = Math.round(bikeZ / CHUNK_SIZE);
+      const activeKeys = new Set();
+
+      for (let dx = -3; dx <= 3; dx++) {
+        for (let dz = -3; dz <= 3; dz++) {
+          const gx = cgx + dx;
+          const gz = cgz + dz;
+          const key = `${gx},${gz}`;
+          activeKeys.add(key);
+          if (!chunks.has(key)) {
+            chunks.set(key, createChunk(gx, gz));
+          }
+        }
+      }
+
+      for (const [key, group] of chunks.entries()) {
+        if (!activeKeys.has(key)) {
+          scene.remove(group);
+          chunks.delete(key);
+        }
+      }
+    }
+
+    // --- KAAMERA & MEDIAPIPE ---
+    const videoElement = document.getElementById('input_video');
+    const canvasElement = document.getElementById('output_canvas');
+    const canvasCtx = canvasElement.getContext('2d');
+
+    function onResults(results) {
+      canvasCtx.save();
+      canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+      canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        results.multiHandLandmarks.forEach(landmarks => {
+          drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: '#00f5d4', lineWidth: 2 });
+          drawLandmarks(canvasCtx, landmarks, { color: '#ff2d87', lineWidth: 1, radius: 3 });
+        });
+
+        currentFeatures = extractFeatures(results.multiHandLandmarks);
+
+        if (recordingLabel && currentFeatures) {
+          trainingData.push({ label: recordingLabel, features: currentFeatures });
+          updateBadges();
+          document.getElementById('status').innerText = "Salvestan: " + recordingLabel.toUpperCase();
+        } else if (trainingData.length > 0) {
+          const state = predictPose(currentFeatures);
+          document.getElementById('ai-state').innerText = state.toUpperCase();
+          document.getElementById('status').innerText = "AI juhib sõitu";
+
+          if (state === 'idle') { targetThrottle = 0; targetSteer = 0; }
+          else if (state === 'gas') { targetThrottle = 1; targetSteer = 0; }
+          else if (state === 'left') { targetThrottle = 0.85; targetSteer = 0.65; }
+          else if (state === 'right') { targetThrottle = 0.85; targetSteer = -0.65; }
+        } else {
+          document.getElementById('status').innerText = "Hoia vasakul nuppu all ja näita poosi";
+        }
+      } else {
+        targetThrottle = 0;
+        targetSteer = 0;
+        document.getElementById('ai-state').innerText = "Käsi pole näha";
+      }
+      canvasCtx.restore();
+    }
+
+    const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+    hands.setOptions({ maxNumHands: 2, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+    hands.onResults(onResults);
+
+    function startSim() {
+      document.getElementById('start-screen').style.display = 'none';
+      const cam = new Camera(videoElement, {
+        onFrame: async () => { await hands.send({ image: videoElement }); },
+        width: 320, height: 240
+      });
+      cam.start();
+      animate();
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      speed += (targetThrottle * 55 - speed) * 0.04;
+      currentSteer += (targetSteer - currentSteer) * 0.1;
+
+      if (speed > 0.5) bikeHeading += currentSteer * 0.032 * (speed / 22);
+
+      const moveDist = (speed / 3.6) * 0.016;
+      bikeX -= Math.sin(bikeHeading) * moveDist;
+      bikeZ -= Math.cos(bikeHeading) * moveDist;
+
+      ground.position.set(bikeX, 0, bikeZ);
+      updateProceduralMap();
+
+      // Tärnide loogika: kiire sõit tõstab, aeglane/seisev langetab
+      if (speed > 35) wantedScore = Math.min(500, wantedScore + 0.25);
+      else if (speed < 5) wantedScore = Math.max(0, wantedScore - 0.15);
+
+      // Kontrollime kokkupõrget ohupostidega
+      const bikePos = new THREE.Vector3(bikeX, 0.65, bikeZ);
+      chunks.forEach(group => {
+        group.children.forEach(child => {
+          if (child.userData.isObstacle) {
+            const worldPos = new THREE.Vector3();
+            child.getWorldPosition(worldPos);
+            if (worldPos.distanceTo(bikePos) < 1.3) {
+              wantedScore = Math.min(500, wantedScore + 45);
+              speed *= 0.65;
+              child.position.y = -5; // lükkame posti eest ära
+            }
+          }
+        });
+      });
+
+      camera.position.set(bikeX, 1.45, bikeZ);
+      camera.rotation.y = bikeHeading;
+
+      handlebarGroup.position.set(
+        bikeX - Math.sin(bikeHeading) * 0.6,
+        1.05,
+        bikeZ - Math.cos(bikeHeading) * 0.6
+      );
+      handlebarGroup.rotation.y = bikeHeading + currentSteer * 0.6;
+
+      document.getElementById('speed-val').innerText = Math.round(speed);
+      updateStarsHUD();
+
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+  </script>
+</body>
+</html>
